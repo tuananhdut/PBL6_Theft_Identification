@@ -8,11 +8,14 @@ from typing import Optional
 import asyncio
 import jwt
 import time
+import pytz
+import datetime
 import cv2
 
 # Khởi tạo ứng dụng FastAPI
 app = FastAPI()
 
+timezone = pytz.timezone('Etc/GMT-7')
 # Cấu hình CORS
 app.add_middleware(
     CORSMiddleware,
@@ -93,6 +96,23 @@ def controlerPicam2(value):
     elif value == 0:
         # Dừng camera khi giá trị khác 0
         picam2.stop()
+
+def draw_datetime_to_frame(frame):
+    current_time = datetime.datetime.now(pytz.utc).astimezone(timezone).strftime('%d-%m-%Y %H:%M:%S')
+    font = cv2.FONT_HERSHEY_DUPLEX
+    font_scale = 0.5
+    font_color = (255, 255, 255)
+    font_thickness = 1
+    (text_width, text_height), _ = cv2.getTextSize(current_time, font, font_scale, font_thickness)
+    top_left_corner_x = 0
+    top_left_corner_y = 0
+    bottom_right_corner_x = top_left_corner_x + text_width + 4
+    bottom_right_corner_y = top_left_corner_y + text_height + 4
+    cv2.rectangle(frame, (top_left_corner_x, top_left_corner_y), (bottom_right_corner_x, bottom_right_corner_y), (0, 0, 0), -1)
+    text_x = top_left_corner_x + 2
+    text_y = bottom_right_corner_y - 2
+    cv2.putText(frame, current_time, (text_x, text_y), font, font_scale, font_color, font_thickness, cv2.LINE_AA)
+    return frame
     
 # Hàm stream video
 async def stream_video():
@@ -100,6 +120,7 @@ async def stream_video():
         while True:
             # Capture một frame từ camera
             frame = picam2.capture_array()
+            frame = draw_datetime_to_frame(frame)
 
             # Mã hóa frame thành JPEG
             _, buffer = cv2.imencode('.jpg', frame)
@@ -156,4 +177,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=" 192.168.46.198", port=8000)
+
+#run:  uvicorn server:app --reload --host 192.168.46.198 --port 8000
+
     
