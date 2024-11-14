@@ -1,0 +1,49 @@
+B1: update ban đầu cho raspberry  (putty)
+- sudo apt update && sudo apt upgrade -y
+- thêm các biến môi trường vào
+
+B2: bật vnc
+- sudo raspi-config
+- interface option => VCN => Yes
+
+B3: Liên kết với vs code
+- cài extention: remote ssh
+- (nếu có liên kết trước đó)  xóa key: ssh-keygen -R 192.168.46.198
+- vào ssh: ssh admin@192.168.46.198
+
+B4: cài thư viện cần thiết để chạy python
+
+
+B5: cấu hình rtmp
+#sudo systemctl start nginx
+
+
+
+
+
+
+# đã rtmp được video - chất lượng video khá thấp
+ffmpeg -re -i Vlog.mp4 -c:v libx264 -preset ultrafast -b:v 1500k -f flv rtmp://192.168.46.198/live/stream1 
+# đã rtmp được video - đã cải thiện chất lượng video
+ffmpeg -re -i Vlog.mp4 -vf "scale=1280:720" -c:v libx264 -preset veryfast -crf 18 -f flv rtmp://192.168.46.198/live/stream1
+# đã stream trực tiếp từ camera 
+libcamera-vid -t 0 --inline --width 1280 --height 720 --framerate 30 --codec yuv420 -o - | \
+ffmpeg -f rawvideo -pix_fmt yuv420p -s 1280x720 -i - -c:v libx264 -preset veryfast -crf 18 -f flv rtmp://192.168.46.198/live/stream1
+
+#chạy nginx
+sudo /usr/local/nginx/sbin/nginx
+
+
+
+#cải thiện rtmp
+libcamera-vid -t 0 --inline --width 640 --height 480 --framerate 15 --codec yuv420 -o - | \
+ffmpeg -fflags nobuffer -f rawvideo -pix_fmt yuv420p -s 640x480 -i - -c:v libx264 -preset ultrafast -tune zerolatency -b:v 800k -f flv rtmp://192.168.46.198/live/stream1
+
+
+
+
+#chốt cuối 
+libcamera-vid -t 0 --inline --width 640 --height 480 --framerate 15 --codec yuv420 -o - | ffmpeg -fflags nobuffer -f rawvideo -pix_fmt yuv420p -s 640x480 -i - -c:v libx264 -preset veryfast -tune zerolatency -g 30 -b:v 1000k -f flv rtmp://192.168.46.198/live/stream1
+
+libcamera-vid -t 0 --inline --width 640 --height 480 --framerate 15 --codec yuv420 -o - | \
+ffmpeg -fflags nobuffer -f rawvideo -pix_fmt yuv420p -s 640x480 -i - -c:v libx264 -preset veryfast -tune zerolatency -g 30 -b:v 1500k -f flv rtmp://192.168.46.198/live/stream1
