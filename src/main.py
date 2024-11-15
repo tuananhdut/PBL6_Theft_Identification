@@ -2,7 +2,7 @@
 
 from src.api import auth, upload, stream
 from src.config.settings import TOKEN
-import threading
+# import threading
 def main():
     print("1. Đăng nhập")
     print("2. Upload file")
@@ -29,24 +29,10 @@ def main():
         else:
             print("Vui lòng đăng nhập trước.")
 
-    elif choice == "3":
-        stream_thread = threading.Thread(target=stream.run, daemon=True)
-        stream_thread.start()
-        print("Đang stream video...")
+    elif choice == "3": 
         stream.run()
-        # if TOKEN:
-        #     video_source = input("Đường dẫn đến nguồn video: ")
-        #     process = stream.start_stream(video_source)
-        #     print("Đang stream... Nhấn Ctrl+C để dừng.")
-        #     try:
-        #         process.wait()
-        #     except KeyboardInterrupt:
-        #         process.terminate()
-        #         print("Đã dừng stream.")
-        # else:
-        #     print("Vui lòng đăng nhập trước.")
     elif choice == "4":
-        username = input("Tên đăng nhập: ")
+        username = input("Tên đăng ký: ")
         password = input("Mật khẩu: ")
         try:
             token = auth.register(username, password)

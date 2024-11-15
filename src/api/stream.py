@@ -4,11 +4,15 @@ import subprocess
 import cv2
 import datetime
 import pytz
+import mediapipe as mp
 from picamera2 import Picamera2
 from src.config.settings import RTMP_URL
 
 timezone = pytz.timezone('Etc/GMT-7')
 picam2 = Picamera2()
+mp_pose = mp.solutions.pose
+pose_detector = mp_pose.Pose(static_image_mode=False, model_complexity=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
 
 def create_rtmp():
     config = picam2.create_video_configuration(main={"size": (640, 480), "format": "YUV420"})
@@ -62,7 +66,24 @@ def write_to_ffmpeg(process):
     while True:
         frame = picam2.capture_array("main")
         frame = draw_datetime_to_frame(frame)
+        frame = extract_pose_landmarks(frame)
         process.stdin.write(frame.tobytes())  # Ghi dữ liệu vào FFmpeg
+
+def extract_pose_landmarks(frame):
+    # Chuyển đổi khung hình sang RGB cho MediaPipe
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Phát hiện các đặc trưng trên cơ thể
+    results = pose_detector.process(rgb_frame)
+    
+    # Nếu có phát hiện các khớp cơ thể, vẽ các điểm đặc trưng
+    if results.pose_landmarks:
+        for landmark in results.pose_landmarks.landmark:
+            x = int(landmark.x * frame.shape[1])
+            y = int(landmark.y * frame.shape[0])
+            cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)  # Vẽ các điểm đặc trưng lên cơ thể
+    
+    return frame
 
 def run():
     process = create_rtmp()
@@ -71,8 +92,8 @@ def run():
 
     try:
         while True:
-            frame = picam2.capture_array("main")
-            frame = draw_datetime_to_frame(frame)
+            # frame = picam2.capture_array("main")
+            # frame = draw_datetime_to_frame(frame)
             # cv2.imshow('Camera', frame)
 
             # Thoát khi nhấn 'q'
