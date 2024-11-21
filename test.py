@@ -1,5 +1,3 @@
-from src.config.settings import RTMP_URL
-from picamera2 import Picamera2
 import threading
 import time
 import subprocess
@@ -7,12 +5,10 @@ import cv2
 import datetime
 import pytz
 
-picam2 = Picamera2()
+# Đường dẫn đến tệp video
+video_path = "./video.mp4"
 
-config = picam2.create_video_configuration(main={"size": (640, 480), "format": "YUV420"})
-picam2.configure(config)
-picam2.set_controls({"FrameDurationLimits": (66666, 66666)})  # 15 FPS
-picam2.start()
+rtmp_url = "rtmp://167.71.195.130/live"
 
 timezone = pytz.timezone('Etc/GMT-7')
 ffmpeg_cmd = [
@@ -20,9 +16,9 @@ ffmpeg_cmd = [
     '-y',
     '-f', 'rawvideo',
     '-vcodec', 'rawvideo',
-    '-pix_fmt', 'yuv420p',
+    '-pix_fmt', 'bgr24',  # OpenCV đọc khung hình với định dạng BGR
     '-s', '640x480',
-    '-r', '15',
+    '-r', '30',
     '-i', '-',
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
@@ -30,7 +26,7 @@ ffmpeg_cmd = [
     '-b:v', '1000k',
     '-bufsize', '500k',
     '-f', 'flv',
-    RTMP_URL
+    rtmp_url
 ]
 
 # Tạo process để truyền dữ liệu qua FFmpeg
@@ -54,31 +50,41 @@ def draw_datetime_to_frame(frame):
     return frame
 
 def write_to_ffmpeg():
-    while True:
-        frame = picam2.capture_array("main")
+    cap = cv2.VideoCapture(video_path)
+
+    if not cap.isOpened():
+        print("Không thể mở tệp video.")
+        return
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            print("Kết thúc tệp video.")
+            break
+
+        # Thay đổi kích thước khung hình thành 640x480 (nếu cần)
+        frame = cv2.resize(frame, (640, 480))
+
+        # Vẽ thời gian hiện tại lên khung hình
         frame = draw_datetime_to_frame(frame)
-        process.stdin.write(frame.tobytes())  # Ghi dữ liệu vào FFmpeg
+
+        # Ghi dữ liệu vào FFmpeg
+        process.stdin.write(frame.tobytes())
+
+    cap.release()
 
 def main():
     thread = threading.Thread(target=write_to_ffmpeg, daemon=True)
     thread.start()
 
     try:
-        while True:
-            frame = picam2.capture_array("main")
-            frame = draw_datetime_to_frame(frame)
-            # cv2.imshow('Camera', frame)
-
-            # Thoát khi nhấn 'q'
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+        while thread.is_alive():
+            time.sleep(1)
     except KeyboardInterrupt:
         print("Stream ended.")
     finally:
-        picam2.close()
         process.stdin.close()
         process.wait()
-        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
