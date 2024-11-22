@@ -1,19 +1,18 @@
-const bcrypt = require('bcryptjs');
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { createPassword, checkPassword } = require('../utils/bcryptHelper');
+const { generateToken, verifyToken } = require('../utils/tokenHelper');
+const ApiError = require('../utils/ApiError');
+const ApiSuccess = require('../utils/ApiSuccess');
 
-
-
-const createUser = async (req, res) => {
-
+const createUser = async (req, res, next) => {
     const { username, password } = req.body;
 
     if (!username || !password) {
-        return res.status(400).json({ error: 'Username and password are required.' });
+        return next(new ApiError(400, 'Username and password are required.'))
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await createPassword(password);
 
     const newUser = new User({
         username: username,
@@ -22,94 +21,95 @@ const createUser = async (req, res) => {
 
     newUser.save()
         .then((User) => {
-            res.status(200).json({ message: "User created successfully" });
+            res.status(201).json(new ApiSuccess("User created successfully"));
         })
         .catch((err) => {
             if (err.code === 11000) {
-                res.status(400).json({ error: "Username already exists" });
+                next(new ApiError(400, "Username already exists"))
             } else {
-                res.status(500).json({ error: "Server error" });
+                next(new ApiError(500, "Server error", err.message))
             }
         });
 }
 
-const login = async (req, res) => {
+const login = async (req, res, next) => {
     const { username, password } = req.body;
 
     if (!username || !password) {
-        return res.status(400).json('Username and password are required.');
+        return next(new ApiError(400, "Username and password are required"))
     }
 
     try {
         const user = await User.findOne({ username });
 
         if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+            return next(new ApiError((404, "User not found")))
         }
 
-
-        const isMatch = await bcrypt.compare(password, user.password);
-
-        if (!isMatch) {
-            return res.status(400).json({ error: 'Invalid credentials' });
+        if (! await checkPassword(password, user.password)) {
+            return next(new ApiError(400, "invalid Credentials"))
         }
 
+        const access_token = generateToken({
+            username: user.username,
+            sensitivity: user.sensitivity
+        })
 
-        // Các phần của jwt
-        // Header: alg, typ
-        // payload: dữ liệu được mã hóa 
-        // signature: chuỗi kí tự mã hóa
-        const access_token = jwt.sign(
-            { userId: user._id, username: user.username },
-            process.env.JWT_SECRET,
-            { expiresIn: '1h' }
-        );
-
-        user.loginToken = access_token;
-
-        res.status(200).json({
-            message: 'Login successful',
-            access_token
-        });
+        res.status(200).json(new ApiSuccess('Login successful', { token: access_token }));
     } catch (err) {
-        res.status(500).json({ error: 'Server error', details: err.message });
+        next(new ApiError(500, "Server error", err.message))
     }
 };
 
-const changePassword = async (req, res) => {
+const changePassword = async (req, res, next) => {
     const { username, oldpassword, newpassword } = req.body;
 
     if (!username || !oldpassword || !newpassword) {
-        return res.status(400).json({ error: "username, oldpassword and newpassword are required" });
+        next(new ApiError(400, "username, oldpassword and newpassword are required"))
     }
 
     try {
         const user = await User.findOne({ username });
 
         if (!user) {
-            return res.status(404).json({ error: "Username doesn't exist" });
+            next(new ApiError(404, "Username doesn't exist"))
         }
 
-        const isMatch = await bcrypt.compare(oldpassword, user.password);
-
-        if (!isMatch) {
-            return res.status(400).json({ error: 'Wrong password' });
+        if (! await checkPassword(oldpassword, user.password)) {
+            next(new ApiError(400, "Wrong password"))
         }
 
-        const hashedPassword = await bcrypt.hash(newpassword, 10);
-
-        user.password = hashedPassword;
+        user.password = await createPassword(newpassword);
 
         await user.save();
 
-        return res.status(200).json({ message: "Password changed successfully" });
+        return res.status(200).json(new ApiSuccess("Password changed successfully"));
 
     } catch (err) {
-        return res.status(500).json({ error: "Server error", details: err.message });
+        next(new ApiError(500, "Server error", err.message))
     }
 };
 
+
+const getSensitivity = (req, res, next) => {
+    try {
+        const tokenVerify = req.user;
+
+        if (!tokenVerify) {
+            return res.status(401).json({ error: "Unauthorized: Token verification failed" });
+        }
+
+        console.log("Verified Token Data:", tokenVerify);
+
+        res.status(200).json(new ApiSuccess("Token verified successfully", tokenVerify));
+    } catch (err) {
+        next(err);
+    }
+};
+
+
+
 module.exports = {
-    createUser, login, changePassword
+    createUser, login, changePassword, getSensitivity
 
 }

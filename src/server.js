@@ -3,6 +3,7 @@ const express = require('express')
 const apiRouter = require('./routes/api')
 const bodyParser = require('body-parser')
 const connectDB = require('./config/database')
+const errorMiddleware = require('./middleware/errorMiddleware')
 
 const app = express()
 const PORT = process.env.PORT
@@ -18,6 +19,8 @@ app.use('/static', express.static('public'))
 connectDB();
 
 app.use('/', apiRouter)
+
+app.use(errorMiddleware)
 
 app.listen(PORT, HOST, () => {
     console.log(`http://${HOST}:${PORT}`)

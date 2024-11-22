@@ -1,8 +1,6 @@
 const mongoose = require('mongoose');
-require('dotenv').config()
+const { MONGOURI } = require('./env');
 
-// MongoDB connection string
-const MONGOURI = process.env.MONGOURI
 
 // Connect to MongoDB
 const connectDB = async () => {
@@ -17,5 +15,6 @@ const connectDB = async () => {
         process.exit(1); // Exit process with failure
     }
 };
+
 
 module.exports = connectDB;
