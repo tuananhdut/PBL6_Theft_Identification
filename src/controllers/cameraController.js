@@ -108,6 +108,17 @@ const renameCamera = async (req, res, next) => {
     }
 }
 
+const getAllCameraByCameraName = async (req, res, next) => {
+    try {
+        const username = req.user.username
+        const listUser = await Camera.find({ username })
+        res.status(200).json(new ApiSuccess("request success", listUser))
+
+    } catch (err) {
+        next(err)
+    }
+}
+
 module.exports = {
-    cameraRegister, deleteCamera, getcamera, linkCamera, renameCamera
+    cameraRegister, deleteCamera, getcamera, linkCamera, renameCamera, getAllCameraByCameraName
 }
