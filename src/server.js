@@ -4,10 +4,9 @@ const apiRouter = require('./routes/api')
 const bodyParser = require('body-parser')
 const connectDB = require('./config/database')
 const errorMiddleware = require('./middleware/errorMiddleware')
+const { HOST, PORT } = require('./config/env')
 
 const app = express()
-const PORT = process.env.PORT
-const HOST = process.env.HOST
 
 //body parser
 app.use(bodyParser.urlencoded({ extended: false }))

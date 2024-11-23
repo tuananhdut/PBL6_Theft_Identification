@@ -4,6 +4,10 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
 
+const generateUUID = () => {
+    return crypto.randomUUID()
+}
+
 const createPassword = async (password) => {
     return await bcrypt.hash(password, 10);
 }
@@ -21,5 +25,5 @@ const checkPassword = async (password, checkpass) => {
 }
 
 module.exports = {
-    checkPassword, createPassword, generateCameraId, generateLinkingCode
+    checkPassword, createPassword, generateCameraId, generateLinkingCode, generateUUID
 }
