@@ -1,6 +1,8 @@
 const express = require('express')
 const { cameraRegister, deleteCamera, getcamera, linkCamera, renameCamera, getAllCameraByCameraName } = require('../controllers/cameraController')
 const authMiddleware = require('../middleware/authMiddleware')
+
+
 const cameraRouter = express.Router()
 
 cameraRouter.get('/register', cameraRegister)

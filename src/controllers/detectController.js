@@ -3,6 +3,8 @@ const Detect = require("../models/Detect")
 const ApiError = require("../utils/ApiError")
 const ApiSuccess = require("../utils/ApiSuccess")
 const { generateUUID } = require("../utils/bcryptHelper")
+const path = require('path');
+
 
 const reportDetectedAction = async (req, res, next) => {
     const { cameraId, beginTime, endTime, sensitivity } = req.body
@@ -68,8 +70,30 @@ const getAllDetectByCameraID = async (req, res, next) => {
     }
 }
 
-const uploadVideo = (req, res, next) => {
+const uploadVideo = async (req, res, next) => {
+    try {
+        if (!req.file) {
+            return next(new ApiError(400, "No file uploaded."))
+        }
 
+        const uuid = req.body.actionId
+        if (!req.body.actionId) {
+            return next(new ApiError(400, "action id is require"))
+        }
+
+        const detect = await Detect.findOne({ uuid })
+        if (!detect) {
+            return next(new ApiError(400, "action id not found"))
+        }
+
+
+        res.status(200).json({
+            message: 'File uploaded successfully!',
+            filePath: path.join('uploads', req.file.filename)
+        });
+    } catch (err) {
+        next(err)
+    }
 }
 
 module.exports = {
