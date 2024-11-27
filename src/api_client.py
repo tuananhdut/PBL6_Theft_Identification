@@ -1,28 +1,29 @@
-import requests
-from config import SERVER_URL,RTMP_URL
-
+import aiohttp
+import asyncio
+from config import SERVER_URL, RTMP_URL
 
 # create camera (output:cameraId, linkingCode)
-def fetch_camera_register_data():
+async def fetch_camera_register_data():
     url = f"{SERVER_URL}/camera/register"
     
     try:
-        response = requests.get(url)
-        
-        if response.status_code == 200:
-            data = response.json()
-            cameraId = data["cameraId"]
-            linkingCode = data["linkingCode"]
-            return data
-        else:
-            print(f"Error: Received status code {response.status_code}")
-            return None
-    except requests.exceptions.RequestException as e:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    cameraId = data["cameraId"]
+                    linkingCode = data["linkingCode"]
+                    return data
+                else:
+                    print(f"Error: Received status code {response.status}")
+                    return None
+    except aiohttp.ClientError as e:
         print(f"An error occurred: {e}")
         return None
 
 
-def fetch_detection_report(camera_id, begin_time, end_time, sensitivity):
+# detect report
+async def fetch_detection_report(camera_id, begin_time, end_time, sensitivity):
     url = f"{SERVER_URL}/detect/report"
     params = {
         "cameraId": camera_id,
@@ -32,36 +33,44 @@ def fetch_detection_report(camera_id, begin_time, end_time, sensitivity):
     }
 
     try:
-        response = requests.post(url, params=params)
-        response.raise_for_status()  # Kiểm tra nếu có lỗi HTTP
-        return response.json()  # Trả về dữ liệu JSON
-    except requests.exceptions.RequestException as e:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, params=params) as response:
+                response.raise_for_status()  # Kiểm tra nếu có lỗi HTTP
+                return await response.json()  # Trả về dữ liệu JSON
+    except aiohttp.ClientError as e:
         print(f"An error occurred: {e}")
         return {"error": str(e)}
 
-def upload_video(action_id, video_file_path):
+async def send_video_request(path, action_id):
     url = f"{SERVER_URL}/detect/video"
+    params = {"actionId": action_id}
     
     try:
-        with open(video_file_path, 'rb') as video_file:
-            # Tạo data (actionID) và tệp video dưới dạng form-data
-            files = {
-                'file': (video_file_path, video_file, 'video/mp4')  # Đảm bảo bạn chỉ định đúng loại MIME của tệp
-            }
-            data = {
-                'actionID': action_id
-            }
-
-            # Gửi yêu cầu POST với file và tham số actionID
-            response = requests.post(url, data=data, files=files)
-            response.raise_for_status()  # Kiểm tra nếu có lỗi HTTP
-            return response.json()  # Trả về dữ liệu JSON
-
-    except requests.exceptions.RequestException as e:
-        print(f"An error occurred: {e}")
-        return {"error": str(e)}
+        with open(path, "rb") as video_file:
+            files = {"file": video_file}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params, data=files) as response:
+                    if response.status == 200:
+                        print(await response.json())
+                        return await response.json()
+                    else:
+                        return f"Failed! Status code: {response.status}, Response: {await response.text()}"
     except FileNotFoundError:
-        print(f"File {video_file_path} not found.")
-        return {"error": f"File {video_file_path} not found."}
+        return "Error: File not found. Please check the file path."
+    except Exception as e:
+        return f"Error: {str(e)}"
 
+async def main():
+    camera_data = await fetch_camera_register_data()
+    print(camera_data)
+    
+    # report = await fetch_detection_report("camera123", "2024-11-01", "2024-11-02", "high")
+    # print(report)
+    
+    # video_response = await send_video_request("./test.mp4", "3e20dc25-751d-4951-b265-f1907ccf6b2e")
+    # print(video_response)
 
+# Chạy asyncio event loop
+if __name__ == "__main__":
+    asyncio.run(main())

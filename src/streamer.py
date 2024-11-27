@@ -6,7 +6,7 @@ import datetime
 import pytz
 import mediapipe as mp
 from picamera2 import Picamera2
-from src.config.settings import RTMP_URL
+from config import RTMP_URL
 
 timezone = pytz.timezone('Etc/GMT-7')
 picam2 = Picamera2()
