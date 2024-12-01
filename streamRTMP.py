@@ -13,7 +13,7 @@ picam2.configure(config)
 picam2.set_controls({"FrameDurationLimits": (66666, 66666)})  # 15 FPS
 picam2.start()
 
-rtmp_url = "rtmp://192.168.46.198/live/stream1"
+rtmp_url = "rtmp://167.71.195.130/live"
 
 timezone = pytz.timezone('Etc/GMT-7')
 ffmpeg_cmd = [

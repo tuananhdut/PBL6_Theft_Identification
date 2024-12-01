@@ -1,5 +1,5 @@
 from picamera2 import Picamera2
-from moviepy.editor import ImageSequenceClip
+# from moviepy.editor import ImageSequenceClip
 import cv2
 import time
 
@@ -25,7 +25,7 @@ def run():
             #in_rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)             
             out.write(frame)
             
-            # cv2.imshow('pose_landmarker_test_recorder', frame)
+            cv2.imshow('pose_landmarker_test_recorder', frame)
        
             # if cv2.waitKey(1) == 27:
             #     break

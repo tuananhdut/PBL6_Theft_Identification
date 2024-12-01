@@ -1,90 +1,74 @@
-import threading
-import time
-import subprocess
-import cv2
-import datetime
-import pytz
+file_name = "./test_dataset/test_ras.mp4"
+shoplifting_continous_count = 0 
+video_reader = cv2.VideoCapture(file_name)
 
-# Đường dẫn đến tệp video
-video_path = "./video.mp4"
+out_path = "./evaluation/output_ras1.mp4"
+    # Get the width and height of the video.
+original_video_width = int(video_reader.get(cv2.CAP_PROP_FRAME_WIDTH))
+original_video_height = int(video_reader.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-rtmp_url = "rtmp://167.71.195.130/live"
+    # Initialize the VideoWriter Object to store the output video in the disk.
+video_writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc('M', 'P', '4', 'V'), 
+                                   video_reader.get(cv2.CAP_PROP_FPS), (original_video_width, original_video_height))
 
-timezone = pytz.timezone('Etc/GMT-7')
-ffmpeg_cmd = [
-    'ffmpeg',
-    '-y',
-    '-f', 'rawvideo',
-    '-vcodec', 'rawvideo',
-    '-pix_fmt', 'bgr24',  # OpenCV đọc khung hình với định dạng BGR
-    '-s', '640x480',
-    '-r', '30',
-    '-i', '-',
-    '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-tune', 'zerolatency',
-    '-b:v', '1000k',
-    '-bufsize', '500k',
-    '-f', 'flv',
-    rtmp_url
-]
+fps = video_reader.get(cv2.CAP_PROP_FPS)
+detector = vision.PoseLandmarker.create_from_options(options)
+lm_list = []
+label = "N/A"
+current_frame = 0
+# Thiết lập cửa sổ có tên "Image"
+cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+# Đặt kích thước cửa sổ là rộng 400 và cao 600
+cv2.resizeWindow("Image", 400, 600)
+# Hiển thị text tại góc trên bên phải
+while True:
+    success, frame = video_reader.read()
+    if not success:
+        break
 
-# Tạo process để truyền dữ liệu qua FFmpeg
-process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+    rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
+    # Calculate timestamp based on frame count and fps
+    current_timestamp = int((current_frame / fps) * 1000)
 
-def draw_datetime_to_frame(frame):
-    current_time = datetime.datetime.now(pytz.utc).astimezone(timezone).strftime('%d-%m-%Y %H:%M:%S')
-    font = cv2.FONT_HERSHEY_DUPLEX
-    font_scale = 0.5
-    font_color = (255, 255, 255)
-    font_thickness = 1
-    (text_width, text_height), _ = cv2.getTextSize(current_time, font, font_scale, font_thickness)
-    top_left_corner_x = 0
-    top_left_corner_y = 0
-    bottom_right_corner_x = top_left_corner_x + text_width + 4
-    bottom_right_corner_y = top_left_corner_y + text_height + 4
-    cv2.rectangle(frame, (top_left_corner_x, top_left_corner_y), (bottom_right_corner_x, bottom_right_corner_y), (0, 0, 0), -1)
-    text_x = top_left_corner_x + 2
-    text_y = bottom_right_corner_y - 2
-    cv2.putText(frame, current_time, (text_x, text_y), font, font_scale, font_color, font_thickness, cv2.LINE_AA)
-    return frame
+    # tren rpi, toc do toi da 5 fps
+    results = detector.detect_for_video(mp_image, current_frame) 
+    if results.pose_landmarks:
+        if current_frame % 2 == 0: # moi truong video, cu 2 frame thi lay keypoint day vao model, 
+                                    # tren rpi k can phai check frame, day thang vao (vi co delay san)
+            c_lm = make_landmark_timestep(results)
+            lm_list.append(c_lm)
+            if len(lm_list) >= n_time_steps:
+                lm_data_to_predict = lm_list[-n_time_steps:]
+                label = detect(interpreter, lm_data_to_predict)
+                #executor.submit(threaded_detect, interpreter, lm_data_to_predict)
+                lm_list.pop(0)
+                #lm_list = []
 
-def write_to_ffmpeg():
-    cap = cv2.VideoCapture(video_path)
+        for pose_landmarks in results.pose_landmarks:
+                # Draw the pose landmarks.
+                pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+                pose_landmarks_proto.landmark.extend([
+                    landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y,
+                                                    z=landmark.z) for landmark
+                    in pose_landmarks
+                ])
+                mp_drawing.draw_landmarks(
+                    frame,
+                    pose_landmarks_proto,
+                    mp_pose.POSE_CONNECTIONS,
+                    mp_drawing_styles.get_default_pose_landmarks_style())
 
-    if not cap.isOpened():
-        print("Không thể mở tệp video.")
-        return
+    else:
+        lm_list = []
+    current_frame += 1       
+    frame = draw_class_on_image(label, frame)
+    cv2.imshow("Image", frame)
+    video_writer.write(frame)
+    if cv2.waitKey(1) == ord('q'):
+        break
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            print("Kết thúc tệp video.")
-            break
-
-        # Thay đổi kích thước khung hình thành 640x480 (nếu cần)
-        frame = cv2.resize(frame, (640, 480))
-
-        # Vẽ thời gian hiện tại lên khung hình
-        frame = draw_datetime_to_frame(frame)
-
-        # Ghi dữ liệu vào FFmpeg
-        process.stdin.write(frame.tobytes())
-
-    cap.release()
-
-def main():
-    thread = threading.Thread(target=write_to_ffmpeg, daemon=True)
-    thread.start()
-
-    try:
-        while thread.is_alive():
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Stream ended.")
-    finally:
-        process.stdin.close()
-        process.wait()
-
-if __name__ == "__main__":
-    main()
+print(current_frame)
+video_reader.release()
+video_writer.release()
+cv2.destroyAllWindows()

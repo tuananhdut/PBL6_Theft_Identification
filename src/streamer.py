@@ -4,46 +4,44 @@ import subprocess
 import cv2
 import datetime
 import pytz
-import mediapipe as mp
 from picamera2 import Picamera2
 from config import RTMP_URL
+import mediapipe as mp
 
-timezone = pytz.timezone('Etc/GMT-7')
 picam2 = Picamera2()
+
 mp_pose = mp.solutions.pose
 pose_detector = mp_pose.Pose(static_image_mode=False, model_complexity=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
+config = picam2.create_video_configuration(main={"size": (640, 480), "format": "YUV420"})
+picam2.configure(config)
+picam2.set_controls({"FrameDurationLimits": (66666, 66666)})  # 15 FPS
+picam2.start()
 
-def create_rtmp():
-    config = picam2.create_video_configuration(main={"size": (640, 480), "format": "YUV420"})
-    picam2.configure(config)
-    picam2.set_controls({"FrameDurationLimits": (66666, 66666)})  # 15 FPS
-    picam2.start()
-
-    ffmpeg_cmd = [
-        'ffmpeg',
-        '-y',
-        '-f', 'rawvideo',
-        '-vcodec', 'rawvideo',
-        '-pix_fmt', 'yuv420p',
-        '-s', '640x480',
-        '-r', '15',
-        '-i', '-',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-b:v', '1000k',
-        '-bufsize', '500k',
-        '-f', 'flv',
-        RTMP_URL
-    ]
-
-    # Tạo process để truyền dữ liệu qua FFmpeg
-    process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
-    return process
+timezone = pytz.timezone('Etc/GMT-7')
+ffmpeg_cmd = [
+    'ffmpeg',
+    '-y',
+    '-f', 'rawvideo',
+    '-vcodec', 'rawvideo',
+    '-pix_fmt', 'yuv420p',
+    '-s', '640x480',
+    '-r', '15',
+    '-i', '-',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-tune', 'zerolatency',
+    '-b:v', '1000k',
+    '-bufsize', '500k',
+    '-f', 'flv',
+    RTMP_URL
+]
 
 
 
+
+# Tạo process để truyền dữ liệu qua FFmpeg
+process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 
 def draw_datetime_to_frame(frame):
     current_time = datetime.datetime.now(pytz.utc).astimezone(timezone).strftime('%d-%m-%Y %H:%M:%S')
@@ -62,13 +60,6 @@ def draw_datetime_to_frame(frame):
     cv2.putText(frame, current_time, (text_x, text_y), font, font_scale, font_color, font_thickness, cv2.LINE_AA)
     return frame
 
-def write_to_ffmpeg(process):
-    while True:
-        frame = picam2.capture_array("main")
-        frame = draw_datetime_to_frame(frame)
-        frame = extract_pose_landmarks(frame)
-        process.stdin.write(frame.tobytes())  # Ghi dữ liệu vào FFmpeg
-
 def extract_pose_landmarks(frame):
     # Chuyển đổi khung hình sang RGB cho MediaPipe
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -85,9 +76,16 @@ def extract_pose_landmarks(frame):
     
     return frame
 
+def write_to_ffmpeg():
+    while True:
+        frame = picam2.capture_array("main")
+        frame = draw_datetime_to_frame(frame)
+        frame = extract_pose_landmarks(frame)
+        # cv2.imshow('Camera', frame)
+        process.stdin.write(frame.tobytes())  # Ghi dữ liệu vào FFmpeg
+
 def run():
-    process = create_rtmp()
-    thread = threading.Thread(target=write_to_ffmpeg, args=(process,),daemon=True)
+    thread = threading.Thread(target=write_to_ffmpeg, daemon=True)
     thread.start()
 
     try:
@@ -106,6 +104,3 @@ def run():
         process.stdin.close()
         process.wait()
         cv2.destroyAllWindows()
-
-# if __name__ == "__main__":
-#     main()
