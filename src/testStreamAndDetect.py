@@ -2,6 +2,7 @@ import subprocess
 import cv2
 import datetime
 import pytz
+import os
 from picamera2 import Picamera2
 from config import RTMP_URL
 import mediapipe as mp
@@ -58,9 +59,8 @@ detector = vision.PoseLandmarker.create_from_options(options)
 
 # config picamera2
 picam2 = Picamera2()
-config = picam2.create_video_configuration(main={"size": (640, 480), "format": "YUV420"})
+config = picam2.create_video_configuration(main={"size": (640, 480), "format": "RGB888"}, controls={'FrameRate': FRAME_RATE})
 picam2.configure(config)
-picam2.set_controls({"FrameDurationLimits": (int(1e6 / FRAME_RATE), int(1e6 / FRAME_RATE))})  # 15 FPS
 picam2.start()
 
 
@@ -210,7 +210,7 @@ async def run():
             frame = picam2.capture_array("main")
             
             #hiển thị ra màn hình
-            cv2.imshow("Frame", frame)
+           
 
             #add frame in buffer
             pre_label = label
@@ -218,6 +218,7 @@ async def run():
             #add frame in deque
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_buffer.append(rgb_image)
+            cv2.imshow("Frame", rgb_image)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
 
             # detect shoplifting
