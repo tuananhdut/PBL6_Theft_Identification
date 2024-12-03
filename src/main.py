@@ -14,7 +14,7 @@ async def main():
     print("camera id = ",CAMERAID)
 
     # streamer
-    testStreamAndDetect.run()
+    await testStreamAndDetect.run()
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -1,5 +1,3 @@
-import threading
-import time
 import subprocess
 import cv2
 import datetime
@@ -8,24 +6,28 @@ from picamera2 import Picamera2
 from config import RTMP_URL
 import mediapipe as mp
 import numpy as np
-import argparse
-import sys
-import os
-import csv
 import tensorflow.lite as tflite
-from pathlib import Path
-
+from collections import deque
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe.framework.formats import landmark_pb2
-
 from concurrent.futures import ThreadPoolExecutor
+from config import CAMERAID
+from api_client import fetch_detection_report
 
+#globa const
+FRAME_RATE = 15
+FRAME_AGO = 120 # số frame trước
+SECONDS_MAX = 20
+lm_list = []
+label = "NORMAL"
+current_frame = 0
+shoplifting_continous_count = 0 
+frame_buffer = deque(maxlen=FRAME_RATE * SECONDS_MAX)
+output_path = "./videos/"
+action_id = ""
 
-
-
-picam2 = Picamera2()
-
+#declaration mediapipe
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
@@ -38,7 +40,6 @@ interpreter.allocate_tensors()
 # Get input and output tensors.
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
-# print(input_details)
 
 #read mediapipe and config
 mediapipe_pose_model_asset = "./model/pose_landmarker_full.task"
@@ -52,11 +53,16 @@ options = vision.PoseLandmarkerOptions(
         min_tracking_confidence=0.5,
         output_segmentation_masks=False)
 
+detector = vision.PoseLandmarker.create_from_options(options)
 
+
+# config picamera2
+picam2 = Picamera2()
 config = picam2.create_video_configuration(main={"size": (640, 480), "format": "YUV420"})
 picam2.configure(config)
-picam2.set_controls({"FrameDurationLimits": (66666, 66666)})  # 15 FPS
+picam2.set_controls({"FrameDurationLimits": (int(1e6 / FRAME_RATE), int(1e6 / FRAME_RATE))})  # 15 FPS
 picam2.start()
+
 
 timezone = pytz.timezone('Etc/GMT-7')
 ffmpeg_cmd = [
@@ -81,6 +87,7 @@ ffmpeg_cmd = [
 # Tạo process để truyền dữ liệu qua FFmpeg
 process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 
+executor = ThreadPoolExecutor(max_workers=1)
 def make_landmark_timestep(results):
     c_lm = []
     def add_lanmark(index):
@@ -144,12 +151,11 @@ def detect(interpreter, lm_list):
         
     return label
 
-executor = ThreadPoolExecutor(max_workers=1)
 
 def threaded_detect(interpreter, lm_data):
     global label
     label = detect(interpreter, lm_data)
-    # Consider adding any post-detection logic here, if needed
+
 
 def draw_datetime_to_frame(frame):
     current_time = datetime.datetime.now(pytz.utc).astimezone(timezone).strftime('%d-%m-%Y %H:%M:%S')
@@ -168,65 +174,96 @@ def draw_datetime_to_frame(frame):
     cv2.putText(frame, current_time, (text_x, text_y), font, font_scale, font_color, font_thickness, cv2.LINE_AA)
     return frame
 
-# value global
-lm_list = []
-label = "N/A"
-current_frame = 0
-shoplifting_continous_count = 0 
-detector = vision.PoseLandmarker.create_from_options(options)
+        
+def save_video_and_send(frames, action_id):
+    global output_path
+    if not frames or not all(isinstance(frame, np.ndarray) for frame in frames):
+        print("Danh sách frames không h?p l? ho?c r?ng. Không th? t?o video.")
+        return
 
-def run():
-    global lm_list,label,current_frame,detector, shoplifting_continous_count, n_time_steps
+    # Lấy kích thước của frame
+    size = (frames[0].shape[1], frames[0].shape[0])
+
+    # Tạo đường dẫn đầy đủ cho video
+    video_filename = f"{action_id}.mp4"
+    full_path = os.path.join(output_path, video_filename)
+
+
+    # Định nghĩa codec và VideoWriter
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec MP4
+    out = cv2.VideoWriter(full_path, fourcc,  FRAME_RATE , size)
+
+    # Ghi từng frame vào video
+    for frame in frames:
+        out.write(frame)
+
+    # Giải phóng tài nguyên
+    out.release()
+    print(f"Video đã được lưu tại: {output_path}")
+
+
+async def run():
+    global lm_list,label,current_frame,detector, shoplifting_continous_count, n_time_steps, frame_buffer, action_id
 
     try:
         while True:
             frame = picam2.capture_array("main")
-            # frame = draw_datetime_to_frame(frame)
+            
+            #hiển thị ra màn hình
+            cv2.imshow("Frame", frame)
 
+            #add frame in buffer
+            pre_label = label
+
+            #add frame in deque
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_buffer.append(rgb_image)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
-
 
             # detect shoplifting
             results = detector.detect_for_video(mp_image, current_frame) 
             if results.pose_landmarks:
-
                 c_lm = make_landmark_timestep(results)
-                # print("tesst ======", c_lm) 
                 lm_list.append(c_lm)
 
                 if len(lm_list) >= n_time_steps:
                     lm_data_to_predict = lm_list[-n_time_steps:]
                     label = detect(interpreter, lm_data_to_predict)
-                    print('test labels: ', label)
 
-                    #executor.submit(threaded_detect, interpreter, lm_data_to_predict)
+                    # hết shoplifting thì lưu video lại và gửi lên server
+                    if label == "NORMAL" and pre_label == "SHOPLIFTING":
+                        print("hêt shoplifting total frame: 1", len(frame_buffer))
+                        save_video_and_send(frame_buffer, action_id)
+
+                    #lưu 32 frame trước đó - done
+                    if label == "NORMAL" and len(frame_buffer) > (FRAME_AGO + n_time_steps):
+                        frame_buffer = list(frame_buffer)[-(FRAME_AGO + n_time_steps):]
+
+                    #nếu phát hiện shoplifting thì gửi thông báo - done
+                    if label == "SHOPLIFTING" and pre_label == "NORMAL":
+                        report = await fetch_detection_report(CAMERAID, "11111", "222222", 16)
+                        action_id = report['actionId']
+
                     lm_list.pop(0)
 
-                 #         #lm_list = []
-
                 for pose_landmarks in results.pose_landmarks:
-                #         # Draw the pose landmarks.
                         pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
                         pose_landmarks_proto.landmark.extend([
                             landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y,
                                                             z=landmark.z) for landmark
                             in pose_landmarks
                         ])
-                    # mp_drawing.draw_landmarks(
-                    #     frame,
-                    #     pose_landmarks_proto,
-                    #     mp_pose.POSE_CONNECTIONS,
-                    #     mp_drawing_styles.get_default_pose_landmarks_style())
-
             else:
                 lm_list = []
-            current_frame += 1       
-            # frame = draw_class_on_image(label, frame)
-            # cv2.imshow("Image", frame)
+                if label == "SHOPLIFTING" :
+                    print("hêt shoplifting total frame: ", len(frame_buffer))
+                    save_video_and_send(frame_buffer, action_id)
+                label = "NORMAL"
+                if len(frame_buffer)>(FRAME_AGO):
+                    frame_buffer = list(frame_buffer)[-(FRAME_AGO):]
 
-            process.stdin.write(frame.tobytes())  
-            # cv2.imshow('Camera', frame)
+            current_frame += 1       
+            process.stdin.write(frame.tobytes())
 
             # Thoát khi nhấn 'q'
             if cv2.waitKey(1) & 0xFF == ord('q'):
