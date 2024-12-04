@@ -14,7 +14,7 @@ from mediapipe.tasks.python import vision
 from mediapipe.framework.formats import landmark_pb2
 from concurrent.futures import ThreadPoolExecutor
 from config import CAMERAID
-from api_client import fetch_detection_report
+from api_client import fetch_detection_report,send_video_request
 
 #globa const
 FRAME_RATE = 15
@@ -27,6 +27,9 @@ shoplifting_continous_count = 0
 frame_buffer = deque(maxlen=FRAME_RATE * SECONDS_MAX)
 output_path = "./videos/"
 action_id = ""
+confidenceGlobal = 0
+sensitivity = 0
+pre_label = "NORMAL"
 
 #declaration mediapipe
 mp_pose = mp.solutions.pose
@@ -70,7 +73,7 @@ ffmpeg_cmd = [
     '-y',
     '-f', 'rawvideo',
     '-vcodec', 'rawvideo',
-    '-pix_fmt', 'yuv420p',
+    '-pix_fmt', 'rgb24',
     '-s', '640x480',
     '-r', '15',
     '-i', '-',
@@ -131,7 +134,8 @@ def draw_class_on_image(label, img):
 
 
 def detect(interpreter, lm_list):
-    global label, shoplifting_continous_count, input_details, output_details
+    global label, shoplifting_continous_count, input_details, output_details, confidenceGlobal,pre_label
+
     lm_list = np.array(lm_list, dtype=np.float32)
     lm_list = np.expand_dims(lm_list, axis=0)
     
@@ -139,15 +143,21 @@ def detect(interpreter, lm_list):
     interpreter.invoke()
     
     output_data = interpreter.get_tensor(output_details[0]['index'])
-    if output_data[0][0] > 0.5:
+    confidence = output_data[0][0]
+
+    if confidence > 0.5:
         label = "SHOPLIFTING"
         print("shoplifting ", shoplifting_continous_count)
         shoplifting_continous_count += 1
+        confidenceGlobal += confidence
         if shoplifting_continous_count >= 3:
-            print("Sending alarm...", shoplifting_continous_count)
+            print("Sending alarm...", shoplifting_continous_count, "confidence : ",int(confidenceGlobal/shoplifting_continous_count*100))
     else:
         label = "NORMAL"
+        if (pre_label == "SHOPLIFTING") : 
+            sensitivity = int(confidenceGlobal/shoplifting_continous_count*100)
         shoplifting_continous_count = 0
+        confidenceGlobal = 0
         
     return label
 
@@ -175,50 +185,57 @@ def draw_datetime_to_frame(frame):
     return frame
 
         
-def save_video_and_send(frames, action_id):
+async def save_video_and_send(frames, action_id, timestamp):
     global output_path
     if not frames or not all(isinstance(frame, np.ndarray) for frame in frames):
-        print("Danh sách frames không h?p l? ho?c r?ng. Không th? t?o video.")
+        print("Danh sách frames không hợp lệ hoặc rỗng. Không thể tạo video.")
         return
 
-    # Lấy kích thước của frame
     size = (frames[0].shape[1], frames[0].shape[0])
-
-    # Tạo đường dẫn đầy đủ cho video
     video_filename = f"{action_id}.mp4"
     full_path = os.path.join(output_path, video_filename)
 
-
     # Định nghĩa codec và VideoWriter
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec MP4
-    out = cv2.VideoWriter(full_path, fourcc,  FRAME_RATE , size)
-
-    # Ghi từng frame vào video
+    out = cv2.VideoWriter(full_path, fourcc, FRAME_RATE, size)
     for frame in frames:
         out.write(frame)
-
-    # Giải phóng tài nguyên
     out.release()
-    print(f"Video đã được lưu tại: {output_path}")
+
+    try:
+        # Gửi video
+        results = await send_video_request(full_path, action_id)
+        print("Upload video : ", results)
+
+        # Xóa video sau khi gửi thành công
+        if os.path.exists(full_path):
+            os.remove(full_path)
+            print(f"Video đã được xóa: {full_path}")
+        else:
+            print(f"Không tìm thấy file để xóa: {full_path}")
+
+    except Exception as e:
+        print(f"Lỗi khi gửi hoặc xóa video: {str(e)}")
+
 
 
 async def run():
-    global lm_list,label,current_frame,detector, shoplifting_continous_count, n_time_steps, frame_buffer, action_id
+    global lm_list,label,current_frame,detector, shoplifting_continous_count, n_time_steps, frame_buffer, action_id, confidenceGlobal, pre_label
+
+    timestamp = datetime.datetime.now().timestamp()
 
     try:
         while True:
             frame = picam2.capture_array("main")
-            
-            #hiển thị ra màn hình
-           
-
-            #add frame in buffer
+            timestamp = datetime.datetime.now().timestamp()
             pre_label = label
+            frame_buffer.append(frame)
 
             #add frame in deque
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_buffer.append(rgb_image)
-            cv2.imshow("Frame", rgb_image)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)      
+            frame = draw_datetime_to_frame(frame)     
+            # cv2.imshow("Frame", rgb_image)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
 
             # detect shoplifting
@@ -233,8 +250,9 @@ async def run():
 
                     # hết shoplifting thì lưu video lại và gửi lên server
                     if label == "NORMAL" and pre_label == "SHOPLIFTING":
-                        print("hêt shoplifting total frame: 1", len(frame_buffer))
-                        save_video_and_send(frame_buffer, action_id)
+                        report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity)
+                        action_id = report['actionId']
+                        await save_video_and_send(frame_buffer, action_id, timestamp)
 
                     #lưu 32 frame trước đó - done
                     if label == "NORMAL" and len(frame_buffer) > (FRAME_AGO + n_time_steps):
@@ -242,9 +260,9 @@ async def run():
 
                     #nếu phát hiện shoplifting thì gửi thông báo - done
                     if label == "SHOPLIFTING" and pre_label == "NORMAL":
-                        report = await fetch_detection_report(CAMERAID, "11111", "222222", 16)
-                        action_id = report['actionId']
-
+                        print("sen message")
+                        # report = await fetch_detection_report(CAMERAID, "11111", "222222", 16)
+                        # action_id = report['actionId']
                     lm_list.pop(0)
 
                 for pose_landmarks in results.pose_landmarks:
@@ -257,8 +275,9 @@ async def run():
             else:
                 lm_list = []
                 if label == "SHOPLIFTING" :
-                    print("hêt shoplifting total frame: ", len(frame_buffer))
-                    save_video_and_send(frame_buffer, action_id)
+                    report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity)
+                    action_id = report['actionId']
+                    await save_video_and_send(frame_buffer, action_id, timestamp)
                 label = "NORMAL"
                 if len(frame_buffer)>(FRAME_AGO):
                     frame_buffer = list(frame_buffer)[-(FRAME_AGO):]

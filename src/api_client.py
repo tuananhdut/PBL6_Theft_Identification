@@ -52,7 +52,6 @@ async def send_video_request(path, action_id):
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, params=params, data=files) as response:
                     if response.status == 200:
-                        print(await response.json())
                         return await response.json()
                     else:
                         return f"Failed! Status code: {response.status}, Response: {await response.text()}"
