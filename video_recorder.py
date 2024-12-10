@@ -6,7 +6,7 @@ import time
 def run():
     CAMERA_FPS = 30  
     VIDEO_DURATION = 30
-    VIDEO_FILENAME = "recorded.mp4"
+    VIDEO_FILENAME = "test.mp4"
 
 
     picam2 = Picamera2()

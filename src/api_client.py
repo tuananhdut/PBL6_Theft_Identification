@@ -13,6 +13,7 @@ async def fetch_camera_register_data():
                     data = await response.json()
                     cameraId = data["cameraId"]
                     linkingCode = data["linkingCode"]
+                    print("link code :", linkingCode)
                     return data
                 else:
                     print(f"Error: Received status code {response.status}")
@@ -38,7 +39,7 @@ async def fetch_detection_report(camera_id, begin_time, end_time, sensitivity):
                 response.raise_for_status()  # Kiểm tra nếu có lỗi HTTP
                 return await response.json()  # Trả về dữ liệu JSON
     except aiohttp.ClientError as e:
-        print(f"An error occurred: {e}")
+        print(f"An error occurred: {e.message}")
         return {"error": str(e)}
 
 async def send_video_request(path, action_id):
