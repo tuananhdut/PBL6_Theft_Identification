@@ -23,3 +23,6 @@ B1: Cài các biến môi trường
 - SERVER_URL, RTMP_URL, TOKEN 
 B2: chạy code
 - python -m src.main
+
+
+bbd39475

@@ -2,7 +2,8 @@ from config import CAMERAID, update_env_variable
 from api_client import fetch_camera_register_data
 import asyncio 
 # import streamer
-import streamAndDetectCheating
+# import streamAndDetectCheating
+import detect_thread
 
 async def main():
     # check camera ID
@@ -15,7 +16,7 @@ async def main():
     print("camera id = ",CAMERAID)
 
     # streamer
-    await streamAndDetectCheating.run()
+    await detect_thread.run()
 
 if __name__ == "__main__":
     asyncio.run(main())
