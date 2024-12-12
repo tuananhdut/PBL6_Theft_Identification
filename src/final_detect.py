@@ -17,28 +17,27 @@ from concurrent.futures import ThreadPoolExecutor
 from config import CAMERAID
 from subprocess import Popen, PIPE
 from api_client import fetch_detection_report,send_video_request
-
+from personDetect import PersonDetect
 
 #globa const
 FRAME_RATE = 15
 FRAME_AGO = 120 # số frame trước
 SECONDS_MAX = 20
-lm_list = []
 label = "NORMAL"
 current_frame = 0
 frame_buffer = deque(maxlen=FRAME_RATE * SECONDS_MAX)
 output_path = "./videos/"
 action_id = ""
-confidenceGlobal = 0
-sensitivity = 0
 n_time_steps = 20
+timestamp = 0
+ 
 
 #declaration mediapipe
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 
-# read model shoplifting
+# read model cheating
 interpreter = tflite.Interpreter(model_path="./model/model_cheating_recognize_v0_lite.tflite")
 interpreter.allocate_tensors()
 
@@ -112,35 +111,7 @@ def make_landmark_timestep(results):
         add_lanmark(i)    
     return c_lm_0,c_lm_1
 
-
-def draw_landmark_on_image(mpDraw, results, img):
-    mpDraw.draw_landmarks(img, results.pose_landmarks, mpPose.POSE_CONNECTIONS)
-    for id, lm in enumerate(results.pose_landmarks.landmark):
-        h, w, c = img.shape
-        print(id, lm)
-        cx, cy = int(lm.x * w), int(lm.y * h)
-        cv2.circle(img, (cx, cy), 5, (255, 0, 0), cv2.FILLED)
-    return img
-
-
-def draw_class_on_image(label, img):
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    bottomLeftCornerOfText = (10, 30)
-    fontScale = 1
-    fontColor = (0, 255, 0)
-    thickness = 2
-    lineType = 2
-    cv2.putText(img, label,
-                bottomLeftCornerOfText,
-                font,
-                fontScale,
-                fontColor,
-                thickness,
-                lineType)
-    return img
-
-
-def detect(interpreter, lm_list, shoplifting_continous_count, sensitivity, pre_label):
+def detect(interpreter, lm_list, cheating_count, sensitivity,pre_label):
     lm_list = np.array(lm_list, dtype=np.float32)
     lm_list = np.expand_dims(lm_list, axis=0)
     
@@ -152,24 +123,17 @@ def detect(interpreter, lm_list, shoplifting_continous_count, sensitivity, pre_l
 
     if confidence > 0.5:
         label = "CHEATING"
-        print("CHEATING ", shoplifting_continous_count)
-        shoplifting_continous_count += 1
-        if shoplifting_continous_count >= 3:
-            print("Sending alarm...", shoplifting_continous_count)
-            sensitivity = shoplifting_continous_count
+        print("CHEATING ", cheating_count)
+        cheating_count += 1
+        if cheating_count >= 3:
+            sensitivity = cheating_count
     else:
         label = "NORMAL"
         if (pre_label == "CHEATING"): 
-            sensitivity = shoplifting_continous_count
-            
-        shoplifting_continous_count = 0
+            sensitivity = cheating_count
+        cheating_count = 0
         
-    return label,shoplifting_continous_count, sensitivity
-
-
-def threaded_detect(interpreter, lm_data):
-    global label
-    label = detect(interpreter, lm_data)
+    return label,cheating_count, sensitivity
 
 
 def draw_datetime_to_frame(frame):
@@ -228,7 +192,6 @@ async def save_video_and_send(frames, action_id, timestamp):
         process.wait()
 
     try:
-        # Gửi video
         results = await send_video_request(full_path, action_id)
         print("Upload video : ", results)
 
@@ -242,25 +205,33 @@ async def save_video_and_send(frames, action_id, timestamp):
     except Exception as e:
         print(f"Lỗi khi gửi hoặc xóa video: {str(e)}")
 
+async def send_report_and_video(sensitivity):
+    global timestamp
+    try:
+        report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity)
+        action_id = report.get('actionId', None)
+        if action_id:
+            await save_video_and_send(frame_buffer, action_id, timestamp)
+    except Exception as e:
+        print(f"Lỗi khi gửi : {str(e)}")
+
 
 async def run():
-    global lm_list,label,current_frame,detector, shoplifting_continous_count, n_time_steps, frame_buffer, action_id, confidenceGlobal
+    global current_frame,detector, n_time_steps, frame_buffer, action_id
 
-
-    shoplifting_continous_count_0 = 0
-    shoplifting_continous_count_1 = 0 
+    cheating_continous_count_0 = 0
+    cheating_continous_count_1 = 0 
     lm_list_0 = []
     lm_list_1 = []
     label_0 = "NORMAL"
     label_1 = "NORMAL"
     sensitivity_0 =0
     sensitivity_1 =0
-    timestamp = datetime.datetime.now().timestamp()
 
     try:
         while True:
             frame = picam2.capture_array("main")
-            cv2.imshow("Frame", frame)
+            # cv2.imshow("Frame", frame)
             frame = draw_datetime_to_frame(frame)
             timestamp = datetime.datetime.now().timestamp()
             pre_label_0 = label_0
@@ -270,10 +241,9 @@ async def run():
             #add frame in deque
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)      
-            frame = draw_datetime_to_frame(frame)     
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
 
-            # detect shoplifting
+            # detect cheating
             results = detector.detect_for_video(mp_image, current_frame) 
             if results.pose_landmarks:
                 c_lm_0, c_lm_1 = make_landmark_timestep(results)
@@ -283,18 +253,10 @@ async def run():
                     lm_list_1.append(c_lm_1) 
                 if (len(lm_list_0) >= n_time_steps):
                     lm_data_to_predict_0 = lm_list_0[-n_time_steps:]
-                    label_0, shoplifting_continous_count_0,sensitivity_0 = detect(interpreter, lm_data_to_predict_0,shoplifting_continous_count_0, sensitivity_0, pre_label_0)
+                    label_0, cheating_continous_count_0,sensitivity_0 = detect(interpreter, lm_data_to_predict_0,cheating_continous_count_0, sensitivity_0, pre_label_0)
                     if label_0 == "NORMAL" and pre_label_0 == "CHEATING":
-                        try:
-                            print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
-                            report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_0)
-                            sensitivity_0 = 0
-                            cheating_continous_count_0 =0
-                            action_id = report.get('actionId', None)
-                            if action_id:
-                                await save_video_and_send(frame_buffer, action_id, timestamp)
-                        except Exception as e:
-                            print(f"Lỗi khi gửi : {str(e)}")
+                        await send_report_and_video(sensitivity_0)
+                        sensitivity_0 =0
 
                     #lưu 32 frame trước đó - done
                     if label_0 == "NORMAL" and sensitivity_1 == 0 and len(frame_buffer) > (FRAME_AGO + n_time_steps):
@@ -303,18 +265,10 @@ async def run():
 
                 if (len(lm_list_1) >= n_time_steps):
                     lm_data_to_predict_1 = lm_list_1[-n_time_steps:]
-                    label_1, shoplifting_continous_count_1,sensitivity_1 = detect(interpreter, lm_data_to_predict_1,shoplifting_continous_count_1, sensitivity_1, pre_label_1)
+                    label_1, cheating_continous_count_1,sensitivity_1 = detect(interpreter, lm_data_to_predict_1,cheating_continous_count_1, sensitivity_1, pre_label_1)
                     if label_1 == "NORMAL" and pre_label_1 == "CHEATING":
-                        try:
-                            print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
-                            report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_1)
-                            sensitivity_1 =0
-                            cheating_continous_count_1 =0
-                            action_id = report.get('actionId', None)
-                            if action_id:
-                                await save_video_and_send(frame_buffer, action_id, timestamp)
-                        except Exception as e:
-                            print(f"Lỗi khi gửi : {str(e)}")
+                        await send_report_and_video(sensitivity_1)
+                        sensitivity_1 =0
 
                     #lưu 32 frame trước đó - done
                     if label_1 == "NORMAL" and sensitivity_0 == 0 and len(frame_buffer) > (FRAME_AGO + n_time_steps):
@@ -332,25 +286,13 @@ async def run():
                 lm_list_0 = []
                 lm_list_1 = []
                 if label_0 == "CHEATING" :
-                    try:
-                        print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
-                        report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_0)
-                        action_id = report.get('actionId', None)
-                        if action_id:
-                            await save_video_and_send(frame_buffer, action_id, timestamp)
-                    except Exception as e:
-                        print(f"Lỗi khi gửi : {str(e)}")
+                    await send_report_and_video(sensitivity_0)
+                    sensitivity_0 = 0
                 label_0 = "NORMAL"
 
                 if label_1 == "CHEATING" :
-                    try:
-                        print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
-                        report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_1)
-                        action_id = report.get('actionId', None)
-                        if action_id:
-                            await save_video_and_send(frame_buffer, action_id, timestamp)
-                    except Exception as e:
-                        print(f"Lỗi khi gửi : {str(e)}")
+                    await send_report_and_video(sensitivity_1)
+                    sensitivity_1 = 0
                 label_1 = "NORMAL"
                 sensitivity_0 = 0
                 sensitivity_1 = 0
