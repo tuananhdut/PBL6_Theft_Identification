@@ -13,84 +13,85 @@ from collections import deque
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe.framework.formats import landmark_pb2
-from concurrent.futures import ThreadPoolExecutor
 from config import CAMERAID
 from subprocess import Popen, PIPE
 from api_client import fetch_detection_report,send_video_request
-from personDetect import PersonDetect
+import personDetect
+
 
 #globa const
 FRAME_RATE = 15
 FRAME_AGO = 120 # số frame trước
 SECONDS_MAX = 20
-label = "NORMAL"
 current_frame = 0
-frame_buffer = deque(maxlen=FRAME_RATE * SECONDS_MAX)
 output_path = "./videos/"
-action_id = ""
 n_time_steps = 20
-timestamp = 0
- 
+input_details = []
+output_details = []
 
-#declaration mediapipe
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
+timezone = pytz.timezone('Etc/GMT-7')
 
 # read model cheating
-interpreter = tflite.Interpreter(model_path="./model/model_cheating_recognize_v0_lite.tflite")
-interpreter.allocate_tensors()
-
-# Get input and output tensors.
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
+def initialize_interpreter(model_path="./model/model_cheating_recognize_v0_lite.tflite"):
+    """Khởi tạo TFLite Interpreter"""
+    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter.allocate_tensors()
+    return interpreter
 
 #read mediapipe and config
-mediapipe_pose_model_asset = "./model/pose_landmarker_full.task"
-base_options = python.BaseOptions(model_asset_path=mediapipe_pose_model_asset)
-options = vision.PoseLandmarkerOptions(
+def initialize_pose_detector(model_path="./model/pose_landmarker_full.task"):
+    """Khởi tạo MediaPipe Pose Landmarker"""
+    base_options = python.BaseOptions(model_asset_path=model_path)
+    options = vision.PoseLandmarkerOptions(
         base_options=base_options,
         running_mode=vision.RunningMode.VIDEO,
         num_poses=2,
         min_pose_detection_confidence=0.8,
         min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5,
-        output_segmentation_masks=False)
+        output_segmentation_masks=False
+    )
+    return vision.PoseLandmarker.create_from_options(options)
 
-detector = vision.PoseLandmarker.create_from_options(options)
+# init camera
+def initializeCamera(FRAME_RATE):
+    """Khởi tạo và cấu hình Picamera2"""
+    picam2 = Picamera2()
+    config = picam2.create_video_configuration(
+        main={"size":(640, 480) , "format": "RGB888"},
+        controls={'FrameRate': FRAME_RATE}
+    )
+    picam2.configure(config)
+    picam2.start()
+    return picam2
 
+def process_pose_landmarks(detector, frame):
+    """Phát hiện và xử lý Pose Landmarks"""
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+    results = detector.detect_for_video(mp_image, 0)
+    return results.pose_landmarks
 
-# config picamera2
-picam2 = Picamera2()
-config = picam2.create_video_configuration(main={"size": (640, 480), "format": "RGB888"}, controls={'FrameRate': FRAME_RATE})
-picam2.configure(config)
-picam2.start()
+def stream_RTMP():
+    command = ['ffmpeg',
+            '-y',  # overwrite output file if it exists
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-pix_fmt', 'rgb24',  # format
+            '-s', '640x480',
+            '-r', '15', 
+            '-i', '-',  # The input comes from a pipe
+            '-c:v', 'libx264',
+            '-g', '15',  
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'ultrafast',
+            '-f', 'flv',
+            #'-tag:v', 'h264',
+            '-nostats',
+            RTMP_URL]
 
+    return subprocess.Popen(command, stdin=subprocess.PIPE)
+    # stderr=subprocess.PIPE
 
-timezone = pytz.timezone('Etc/GMT-7')
-command = ['ffmpeg',
-           '-y',  # overwrite output file if it exists
-           '-f', 'rawvideo',
-           '-vcodec', 'rawvideo',
-           '-pix_fmt', 'rgb24',  # format
-           '-s', '640x480',
-           '-r', '15', 
-           '-i', '-',  # The input comes from a pipe
-           '-c:v', 'libx264',
-           '-g', '15',  
-           '-pix_fmt', 'yuv420p',
-           '-preset', 'ultrafast',
-           '-f', 'flv',
-           #'-tag:v', 'h264',
-           '-nostats',
-           RTMP_URL]
-
-
-# Tạo process để truyền dữ liệu qua FFmpeg
-process = subprocess.Popen(command, stdin=subprocess.PIPE)
-# stderr=subprocess.PIPE
-
-executor = ThreadPoolExecutor(max_workers=1)
 def make_landmark_timestep(results):
     c_lm_0 = []
     c_lm_1 = []
@@ -111,7 +112,8 @@ def make_landmark_timestep(results):
         add_lanmark(i)    
     return c_lm_0,c_lm_1
 
-def detect(interpreter, lm_list, cheating_count, sensitivity,pre_label):
+
+def detect(interpreter, lm_list, cheating_continous_count, sensitivity, pre_label):
     lm_list = np.array(lm_list, dtype=np.float32)
     lm_list = np.expand_dims(lm_list, axis=0)
     
@@ -119,21 +121,22 @@ def detect(interpreter, lm_list, cheating_count, sensitivity,pre_label):
     interpreter.invoke()
     
     output_data = interpreter.get_tensor(output_details[0]['index'])
-    confidence = output_data[0][0]
 
-    if confidence > 0.5:
+    if output_data[0][0] > 0.5:
         label = "CHEATING"
-        print("CHEATING ", cheating_count)
-        cheating_count += 1
-        if cheating_count >= 3:
-            sensitivity = cheating_count
+        print("CHEATING ", cheating_continous_count)
+        cheating_continous_count += 1
+        if cheating_continous_count >= 3:
+            print("Sending alarm...", cheating_continous_count)
+            sensitivity = cheating_continous_count
     else:
         label = "NORMAL"
         if (pre_label == "CHEATING"): 
-            sensitivity = cheating_count
-        cheating_count = 0
+            sensitivity = cheating_continous_count
+            
+        cheating_continous_count = 0
         
-    return label,cheating_count, sensitivity
+    return label,cheating_continous_count, sensitivity
 
 
 def draw_datetime_to_frame(frame):
@@ -152,8 +155,8 @@ def draw_datetime_to_frame(frame):
     text_y = bottom_right_corner_y - 2
     cv2.putText(frame, current_time, (text_x, text_y), font, font_scale, font_color, font_thickness, cv2.LINE_AA)
     return frame
+    
 
-        
 async def save_video_and_send(frames, action_id, timestamp):
     global output_path
     if not frames or not all(isinstance(frame, np.ndarray) for frame in frames):
@@ -192,6 +195,7 @@ async def save_video_and_send(frames, action_id, timestamp):
         process.wait()
 
     try:
+        # Gửi video
         results = await send_video_request(full_path, action_id)
         print("Upload video : ", results)
 
@@ -205,19 +209,19 @@ async def save_video_and_send(frames, action_id, timestamp):
     except Exception as e:
         print(f"Lỗi khi gửi hoặc xóa video: {str(e)}")
 
-async def send_report_and_video(sensitivity):
-    global timestamp
-    try:
-        report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity)
-        action_id = report.get('actionId', None)
-        if action_id:
-            await save_video_and_send(frame_buffer, action_id, timestamp)
-    except Exception as e:
-        print(f"Lỗi khi gửi : {str(e)}")
-
 
 async def run():
-    global current_frame,detector, n_time_steps, frame_buffer, action_id
+    global current_frame,input_details,output_details
+
+    picam2 = initializeCamera(FRAME_RATE)
+    interpreter = initialize_interpreter()
+    detector = initialize_pose_detector()
+    frame_buffer = deque(maxlen=FRAME_RATE * SECONDS_MAX)
+    process = stream_RTMP()
+
+    # Get input and output tensors.
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
 
     cheating_continous_count_0 = 0
     cheating_continous_count_1 = 0 
@@ -227,6 +231,7 @@ async def run():
     label_1 = "NORMAL"
     sensitivity_0 =0
     sensitivity_1 =0
+    timestamp = datetime.datetime.now().timestamp()
 
     try:
         while True:
@@ -241,6 +246,7 @@ async def run():
             #add frame in deque
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)      
+            frame = draw_datetime_to_frame(frame)     
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
 
             # detect cheating
@@ -255,8 +261,16 @@ async def run():
                     lm_data_to_predict_0 = lm_list_0[-n_time_steps:]
                     label_0, cheating_continous_count_0,sensitivity_0 = detect(interpreter, lm_data_to_predict_0,cheating_continous_count_0, sensitivity_0, pre_label_0)
                     if label_0 == "NORMAL" and pre_label_0 == "CHEATING":
-                        await send_report_and_video(sensitivity_0)
-                        sensitivity_0 =0
+                        try:
+                            print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
+                            report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_0)
+                            sensitivity_0 = 0
+                            cheating_continous_count_0 =0
+                            action_id = report.get('actionId', None)
+                            if action_id:
+                                await save_video_and_send(frame_buffer, action_id, timestamp)
+                        except Exception as e:
+                            print(f"Lỗi khi gửi : {str(e)}")
 
                     #lưu 32 frame trước đó - done
                     if label_0 == "NORMAL" and sensitivity_1 == 0 and len(frame_buffer) > (FRAME_AGO + n_time_steps):
@@ -267,8 +281,16 @@ async def run():
                     lm_data_to_predict_1 = lm_list_1[-n_time_steps:]
                     label_1, cheating_continous_count_1,sensitivity_1 = detect(interpreter, lm_data_to_predict_1,cheating_continous_count_1, sensitivity_1, pre_label_1)
                     if label_1 == "NORMAL" and pre_label_1 == "CHEATING":
-                        await send_report_and_video(sensitivity_1)
-                        sensitivity_1 =0
+                        try:
+                            print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
+                            report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_1)
+                            sensitivity_1 =0
+                            cheating_continous_count_1 =0
+                            action_id = report.get('actionId', None)
+                            if action_id:
+                                await save_video_and_send(frame_buffer, action_id, timestamp)
+                        except Exception as e:
+                            print(f"Lỗi khi gửi : {str(e)}")
 
                     #lưu 32 frame trước đó - done
                     if label_1 == "NORMAL" and sensitivity_0 == 0 and len(frame_buffer) > (FRAME_AGO + n_time_steps):
@@ -286,13 +308,25 @@ async def run():
                 lm_list_0 = []
                 lm_list_1 = []
                 if label_0 == "CHEATING" :
-                    await send_report_and_video(sensitivity_0)
-                    sensitivity_0 = 0
+                    try:
+                        print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
+                        report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_0)
+                        action_id = report.get('actionId', None)
+                        if action_id:
+                            await save_video_and_send(frame_buffer, action_id, timestamp)
+                    except Exception as e:
+                        print(f"Lỗi khi gửi : {str(e)}")
                 label_0 = "NORMAL"
 
                 if label_1 == "CHEATING" :
-                    await send_report_and_video(sensitivity_1)
-                    sensitivity_1 = 0
+                    try:
+                        print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
+                        report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_1)
+                        action_id = report.get('actionId', None)
+                        if action_id:
+                            await save_video_and_send(frame_buffer, action_id, timestamp)
+                    except Exception as e:
+                        print(f"Lỗi khi gửi : {str(e)}")
                 label_1 = "NORMAL"
                 sensitivity_0 = 0
                 sensitivity_1 = 0
