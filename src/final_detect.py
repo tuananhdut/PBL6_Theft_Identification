@@ -16,14 +16,16 @@ from mediapipe.framework.formats import landmark_pb2
 from config import CAMERAID
 from subprocess import Popen, PIPE
 from api_client import fetch_detection_report,send_video_request
-import personDetect
-
+from personDetect import PersonDetect
+import imageio.v3 as iio
+import asyncio
+import threading
+import time
 
 #globa const
 FRAME_RATE = 15
 FRAME_AGO = 120 # số frame trước
 SECONDS_MAX = 20
-current_frame = 0
 output_path = "./videos/"
 n_time_steps = 20
 input_details = []
@@ -65,11 +67,11 @@ def initializeCamera(FRAME_RATE):
     picam2.start()
     return picam2
 
-def process_pose_landmarks(detector, frame):
+def process_pose_landmarks(detector, frame, current_frame):
     """Phát hiện và xử lý Pose Landmarks"""
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-    results = detector.detect_for_video(mp_image, 0)
-    return results.pose_landmarks
+    results = detector.detect_for_video(mp_image, current_frame)
+    return results
 
 def stream_RTMP():
     command = ['ffmpeg',
@@ -158,43 +160,22 @@ def draw_datetime_to_frame(frame):
     
 
 async def save_video_and_send(frames, action_id, timestamp):
+    t = time.time()
     global output_path
     if not frames or not all(isinstance(frame, np.ndarray) for frame in frames):
         print("Danh sách frames không hợp lệ hoặc rỗng. Không thể tạo video.")
         return
 
-    size = (frames[0].shape[1], frames[0].shape[0])
     video_filename = f"{action_id}.mp4"
     full_path = os.path.join(output_path, video_filename)
 
-    ffmpeg_load = [
-        ffmpeg.get_ffmpeg_exe(),
-        '-y',  # Ghi đè file nếu đã tồn tại
-        '-f', 'rawvideo',  # Định dạng input (raw frames)
-        '-vcodec', 'rawvideo',  # Codec input
-        '-pix_fmt', 'rgb24',  # Pixel format của frame
-        '-s', f'{size[0]}x{size[1]}',  # Kích thước khung hình
-        '-r', str(FRAME_RATE),  # Frame rate
-        '-i', '-',  # Input từ stdin
-        '-c:v', 'libx264',  # Codec H264
-        '-pix_fmt', 'yuv420p',  # Định dạng màu output
-        full_path  # File output
-    ]
-
-    process = Popen(ffmpeg_load, stdin=PIPE, stderr=PIPE)
+    # Lưu video với codec libx264
+    iio.imwrite(full_path, frames, fps=FRAME_RATE, codec="libx264")
+    print(f"Video đã được lưu tại: {full_path}")
+    print("thời gian lưu video", time.time()-t)
 
     try:
-        for frame in frames:
-            # Gửi từng frame (dưới dạng bytes) vào stdin của FFmpeg
-            process.stdin.write(frame.tobytes())
-    except Exception as e:
-        print(f"Lỗi khi ghi video: {e}")
-    finally:
-        # Đóng stdin và chờ FFmpeg kết thúc
-        process.stdin.close()
-        process.wait()
-
-    try:
+        t = time.time()
         # Gửi video
         results = await send_video_request(full_path, action_id)
         print("Upload video : ", results)
@@ -205,10 +186,26 @@ async def save_video_and_send(frames, action_id, timestamp):
             print(f"Video đã được xóa: {full_path}")
         else:
             print(f"Không tìm thấy file để xóa: {full_path}")
+        print("thời gian gửi video : ", time.time()-t)
 
     except Exception as e:
         print(f"Lỗi khi gửi hoặc xóa video: {str(e)}")
+        
 
+
+def threaded_save_video_and_send(frames, action_id, timestamp):
+    
+    # Copy frames để đảm bảo tham trị
+    frames_copy = frames.copy()
+    action_id_copy = action_id[:]
+    timestamp_copy = timestamp
+
+    def task():
+        asyncio.run(save_video_and_send(frames_copy, action_id_copy, timestamp_copy))
+
+    thread = threading.Thread(target=task)
+    thread.start()
+   
 
 async def run():
     global current_frame,input_details,output_details
@@ -231,26 +228,24 @@ async def run():
     label_1 = "NORMAL"
     sensitivity_0 =0
     sensitivity_1 =0
+    current_frame =0
+    action_id = "0"
     timestamp = datetime.datetime.now().timestamp()
 
     try:
         while True:
             frame = picam2.capture_array("main")
-            # cv2.imshow("Frame", frame)
-            frame = draw_datetime_to_frame(frame)
+            cv2.imshow("Frame", frame)
             timestamp = datetime.datetime.now().timestamp()
             pre_label_0 = label_0
             pre_label_1 = label_1
             frame_buffer.append(frame)
-
-            #add frame in deque
-            rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)      
             frame = draw_datetime_to_frame(frame)     
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
 
             # detect cheating
-            results = detector.detect_for_video(mp_image, current_frame) 
+            results = process_pose_landmarks(detector, frame, current_frame)
             if results.pose_landmarks:
                 c_lm_0, c_lm_1 = make_landmark_timestep(results)
                 if len(c_lm_0) > 0 : 
@@ -266,9 +261,9 @@ async def run():
                             report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_0)
                             sensitivity_0 = 0
                             cheating_continous_count_0 =0
-                            action_id = report.get('actionId', None)
-                            if action_id:
-                                await save_video_and_send(frame_buffer, action_id, timestamp)
+                            action_id = report.get('actionId', "0")
+                            # if action_id:
+                            threaded_save_video_and_send(frame_buffer.copy(), action_id[:], int(timestamp))
                         except Exception as e:
                             print(f"Lỗi khi gửi : {str(e)}")
 
@@ -286,9 +281,9 @@ async def run():
                             report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_1)
                             sensitivity_1 =0
                             cheating_continous_count_1 =0
-                            action_id = report.get('actionId', None)
-                            if action_id:
-                                await save_video_and_send(frame_buffer, action_id, timestamp)
+                            action_id = report.get('actionId', "0")
+                            # if action_id:
+                            threaded_save_video_and_send(frame_buffer.copy(), action_id[:], int(timestamp))
                         except Exception as e:
                             print(f"Lỗi khi gửi : {str(e)}")
 
@@ -311,9 +306,9 @@ async def run():
                     try:
                         print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
                         report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_0)
-                        action_id = report.get('actionId', None)
-                        if action_id:
-                            await save_video_and_send(frame_buffer, action_id, timestamp)
+                        action_id = report.get('actionId', "0")
+                        # if action_id:
+                        threaded_save_video_and_send(frame_buffer.copy(), action_id[:], int(timestamp))
                     except Exception as e:
                         print(f"Lỗi khi gửi : {str(e)}")
                 label_0 = "NORMAL"
@@ -322,9 +317,9 @@ async def run():
                     try:
                         print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
                         report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_1)
-                        action_id = report.get('actionId', None)
-                        if action_id:
-                            await save_video_and_send(frame_buffer, action_id, timestamp)
+                        action_id = report.get('actionId', "0")
+                        # if action_id:
+                        threaded_save_video_and_send(frame_buffer.copy(), action_id[:], int(timestamp))
                     except Exception as e:
                         print(f"Lỗi khi gửi : {str(e)}")
                 label_1 = "NORMAL"
