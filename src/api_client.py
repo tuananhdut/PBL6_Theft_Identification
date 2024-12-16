@@ -24,13 +24,14 @@ async def fetch_camera_register_data():
 
 
 # detect report
-async def fetch_detection_report(camera_id, begin_time, end_time, sensitivity):
+async def fetch_detection_report(camera_id, begin_time, end_time, sensitivity, accuracy):
     url = f"{SERVER_URL}/detect/report"
     params = {
         "cameraId": camera_id,
         "beginTime": begin_time,
         "endTime": end_time,
-        "sensitivity": sensitivity
+        "sensitivity": sensitivity,
+        "accuracy": accuracy
     }
 
     try:

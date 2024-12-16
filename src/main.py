@@ -3,8 +3,8 @@ from api_client import fetch_camera_register_data
 import asyncio 
 # import streamer
 # import streamAndDetectCheating
-import detect_thread
-# import final_detect
+# import detect_thread
+import final_detect
 
 async def main():
     # check camera ID
@@ -17,7 +17,7 @@ async def main():
     print("camera id = ",CAMERAID)
 
     # streamer
-    await detect_thread.run()
+    await final_detect.run()
 
 if __name__ == "__main__":
     asyncio.run(main())
