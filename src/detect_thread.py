@@ -1,3 +1,4 @@
+import time
 import subprocess 
 import cv2
 import datetime
@@ -191,6 +192,7 @@ def draw_datetime_to_frame(frame):
 
         
 async def save_video_and_send(frames, action_id, timestamp):
+    t = time.time()
     global output_path
     if not frames or not all(isinstance(frame, np.ndarray) for frame in frames):
         print("Danh sách frames không hợp lệ hoặc rỗng. Không thể tạo video.")
@@ -222,10 +224,14 @@ async def save_video_and_send(frames, action_id, timestamp):
             process.stdin.write(frame.tobytes())
     except Exception as e:
         print(f"Lỗi khi ghi video: {e}")
+    
     finally:
         # Đóng stdin và chờ FFmpeg kết thúc
         process.stdin.close()
         process.wait()
+
+    print("thời gian lưu video : ", time.time()-t)
+    t = time.time()
 
     try:
         # Gửi video
@@ -241,6 +247,7 @@ async def save_video_and_send(frames, action_id, timestamp):
 
     except Exception as e:
         print(f"Lỗi khi gửi hoặc xóa video: {str(e)}")
+    print("thời gian guir video : ", time.time()-t)
 
 
 async def run():
@@ -291,8 +298,8 @@ async def run():
                             sensitivity_0 = 0
                             cheating_continous_count_0 =0
                             action_id = report.get('actionId', None)
-                            if action_id:
-                                await save_video_and_send(frame_buffer, action_id, timestamp)
+                            #if action_id:
+                            await save_video_and_send(frame_buffer, action_id, timestamp)
                         except Exception as e:
                             print(f"Lỗi khi gửi : {str(e)}")
 
@@ -311,8 +318,8 @@ async def run():
                             sensitivity_1 =0
                             cheating_continous_count_1 =0
                             action_id = report.get('actionId', None)
-                            if action_id:
-                                await save_video_and_send(frame_buffer, action_id, timestamp)
+                            #if action_id:
+                            await save_video_and_send(frame_buffer, action_id, timestamp)
                         except Exception as e:
                             print(f"Lỗi khi gửi : {str(e)}")
 
@@ -336,8 +343,8 @@ async def run():
                         print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
                         report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_0)
                         action_id = report.get('actionId', None)
-                        if action_id:
-                            await save_video_and_send(frame_buffer, action_id, timestamp)
+                        #if action_id:
+                        await save_video_and_send(frame_buffer, action_id, timestamp)
                     except Exception as e:
                         print(f"Lỗi khi gửi : {str(e)}")
                 label_0 = "NORMAL"
@@ -347,8 +354,8 @@ async def run():
                         print("sensitivity_0  : ", sensitivity_0,"sensitivity_1: ",sensitivity_1)
                         report = await fetch_detection_report(CAMERAID, int(timestamp - len(frame_buffer)/FRAME_RATE), int(timestamp), sensitivity_1)
                         action_id = report.get('actionId', None)
-                        if action_id:
-                            await save_video_and_send(frame_buffer, action_id, timestamp)
+                        #if action_id:
+                        await save_video_and_send(frame_buffer, action_id, timestamp)
                     except Exception as e:
                         print(f"Lỗi khi gửi : {str(e)}")
                 label_1 = "NORMAL"

@@ -6,9 +6,10 @@ import time
 def run():
     CAMERA_FPS = 30  
     VIDEO_DURATION = 30
-    VIDEO_FILENAME = "ao_trong45.mp4"
-    # VIDEO_FILENAME = "tuiao32.mp4"
-    # VIDEO_FILENAME = "duoilen15.mp4"
+    VIDEO_FILENAME = "tui_ao_3.mp4"
+
+    # VIDEO_FILENAME = "trenxuong14.mp4"
+    # VIDEO_FILENAME = "tuitrong14.mp4"
 
 
     picam2 = Picamera2()
@@ -24,7 +25,7 @@ def run():
         while True:
         # while time.time() - start_time < VIDEO_DURATION:
             frame = picam2.capture_array()    
-            #in_rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)             
+            in_rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)             
             out.write(frame)
             
             cv2.imshow('pose_landmarker_test_recorder', frame)
